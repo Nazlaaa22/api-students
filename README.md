@@ -578,3 +578,151 @@ http://127.0.0.1:3000/api/v1/students
 REST API Students berhasil dibuat menggunakan Go dengan menerapkan konsep REST API dan operasi CRUD.
 
 API telah dilengkapi dengan fitur pagination, search, sorting, filtering, serta validasi input. Seluruh endpoint telah diuji menggunakan Thunder Client, termasuk pengujian terhadap kondisi error seperti ID tidak valid, NIM duplikat, body JSON tidak valid, field wajib, dan data yang tidak ditemukan.
+
+
+
+WKWK iya 😭 kepanjangan.
+
+Kalau buat **README Tugas 3**, cukup yang penting-penting aja. **Copy ini full, ganti README lama:**
+
+````markdown
+# REST API Students - Tugas 3
+
+REST API untuk mengelola data mahasiswa menggunakan Go, Fiber, dan PostgreSQL.
+
+## Teknologi
+
+- Go
+- Fiber v2
+- PostgreSQL
+- pgx/v5
+- Thunder Client
+
+## Fitur
+
+- GET mahasiswa
+- GET mahasiswa berdasarkan ID
+- POST mahasiswa
+- PUT mahasiswa
+- PATCH mahasiswa
+- DELETE mahasiswa
+- Pagination
+- Search nama
+- Sorting
+- Filter mahasiswa aktif
+- Filter nilai minimum dan maksimum
+- Validasi input
+- Error handling
+
+## Repository Pattern
+
+Akses database dipisahkan menggunakan Repository Pattern.
+
+Method repository:
+
+```text
+FindAll
+FindByID
+Create
+Update
+Delete
+````
+
+Repository juga menggunakan sentinel error:
+
+```go
+ErrNotFound
+ErrDuplicate
+```
+
+## Database
+
+Database menggunakan PostgreSQL dengan tabel:
+
+```text
+students
+```
+
+Kolom utama:
+
+```text
+id
+nim
+name
+grade
+is_active
+created_at
+updated_at
+```
+
+`id` menggunakan UUID dan `nim` memiliki constraint UNIQUE.
+
+## Query Database
+
+Fitur berikut diproses pada PostgreSQL:
+
+* Search menggunakan `ILIKE`
+* Filtering menggunakan `WHERE`
+* Sorting menggunakan `ORDER BY`
+* Pagination menggunakan `LIMIT` dan `OFFSET`
+* Total data menggunakan `COUNT(*)`
+
+Query menggunakan parameterized query.
+
+## Endpoint
+
+| Method | Endpoint        | Fungsi               |
+| ------ | --------------- | -------------------- |
+| GET    | `/students`     | Daftar mahasiswa     |
+| GET    | `/students/:id` | Detail mahasiswa     |
+| POST   | `/students`     | Tambah mahasiswa     |
+| PUT    | `/students/:id` | Update seluruh data  |
+| PATCH  | `/students/:id` | Update sebagian data |
+| DELETE | `/students/:id` | Hapus mahasiswa      |
+
+## Status HTTP yang Diuji
+
+* `200 OK` - Request berhasil
+* `201 Created` - Data berhasil dibuat
+* `204 No Content` - Data berhasil dihapus
+* `404 Not Found` - Data tidak ditemukan
+* `409 Conflict` - NIM duplikat
+* `500 Internal Server Error` - Database tidak dapat diakses
+
+## Cara Menjalankan
+
+Clone repository:
+
+```bash
+git clone https://github.com/Nazlaaa22/api-students.git
+cd api-students
+```
+
+Siapkan file `.env` sesuai konfigurasi PostgreSQL.
+
+Kemudian jalankan:
+
+```bash
+go run .
+```
+
+Server:
+
+```text
+http://127.0.0.1:3000
+```
+
+API:
+
+```text
+http://127.0.0.1:3000/api/v1/students
+```
+
+## Testing
+
+Pengujian dilakukan menggunakan Thunder Client dengan menguji endpoint CRUD, pagination, search, sorting, filtering, serta error `404`, `409`, dan `500`.
+
+## GitHub
+
+[https://github.com/Nazlaaa22/api-students](https://github.com/Nazlaaa22/api-students)
+
