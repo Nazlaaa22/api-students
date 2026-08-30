@@ -1,26 +1,28 @@
 package main
 
-import (
-	"strconv"
+import "github.com/gofiber/fiber/v2"
 
-	"github.com/gofiber/fiber/v2"
-)
-
-func sendSuccess(c *fiber.Ctx, status int, message string, data interface{}) error {
+func sendSuccess(
+	c *fiber.Ctx,
+	status int,
+	message string,
+	data interface{},
+) error {
 	return c.Status(status).JSON(fiber.Map{
-		"success": true,
-		"message": message,
 		"data":    data,
-	})
-}
-
-func sendError(c *fiber.Ctx, status int, message string) error {
-	return c.Status(status).JSON(fiber.Map{
-		"success": false,
 		"message": message,
+		"success": true,
 	})
 }
 
-func parseID(id string) (int, error) {
-	return strconv.Atoi(id)
+func sendError(
+	c *fiber.Ctx,
+	status int,
+	message string,
+) error {
+	return c.Status(status).JSON(fiber.Map{
+		"data":    nil,
+		"message": message,
+		"success": false,
+	})
 }

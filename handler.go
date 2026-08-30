@@ -1,41 +1,28 @@
 package main
 
 import (
-	"fmt"
-	"sort"
+	"errors"
 	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+
+	"api-students/model"
+	"api-students/repository"
 )
 
-var students = []Student{
-	{
-		ID:       "1",
-		NIM:      "001",
-		Name:     "Nazla",
-		Grade:    90,
-		IsActive: true,
-	},
-	{
-		ID:       "2",
-		NIM:      "002",
-		Name:     "Nafisa",
-		Grade:    85,
-		IsActive: true,
-	},
-	{
-		ID:       "3",
-		NIM:      "003",
-		Name:     "Nana",
-		Grade:    80,
-		IsActive: false,
-	},
+type Handler struct {
+	repo repository.StudentRepository
+}
+
+func NewHandler(repo repository.StudentRepository) *Handler {
+	return &Handler{
+		repo: repo,
+	}
 }
 
 // GET /api/v1/students
-func getStudents(c *fiber.Ctx) error {
-	// Pagination
+func (h *Handler) GetStudents(c *fiber.Ctx) error {
 	page, err := strconv.Atoi(c.Query("page", "1"))
 	if err != nil || page < 1 {
 		page = 1
@@ -46,221 +33,243 @@ func getStudents(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	// Search berdasarkan nama, tidak membedakan huruf besar/kecil
-	search := strings.ToLower(c.Query("search"))
+	search := c.Query("search")
 
-	// Filter
-	activeFilter := c.Query("active")
-	minGrade, _ := strconv.ParseFloat(c.Query("min_grade", ""), 64)
-	maxGrade, _ := strconv.ParseFloat(c.Query("max_grade", ""), 64)
+	var active *bool
 
-	filtered := make([]Student, 0)
-
-	for _, student := range students {
-
-		if search != "" &&
-			!strings.Contains(strings.ToLower(student.Name), search) {
-			continue
+	if value := c.Query("active"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			active = &parsed
 		}
-
-		if activeFilter != "" {
-			active, err := strconv.ParseBool(activeFilter)
-			if err == nil && student.IsActive != active {
-				continue
-			}
-		}
-
-		if c.Query("min_grade") != "" && student.Grade < minGrade {
-			continue
-		}
-
-		if c.Query("max_grade") != "" && student.Grade > maxGrade {
-			continue
-		}
-
-		filtered = append(filtered, student)
 	}
 
-	// Sorting
+	var minGrade *float64
+
+	if value := c.Query("min_grade"); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err == nil {
+			minGrade = &parsed
+		}
+	}
+
+	var maxGrade *float64
+
+	if value := c.Query("max_grade"); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err == nil {
+			maxGrade = &parsed
+		}
+	}
+
 	sortField := c.Query("sort")
 
-	switch sortField {
-	case "name":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].Name < filtered[j].Name
-		})
-	case "-name":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].Name > filtered[j].Name
-		})
-	case "grade":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].Grade < filtered[j].Grade
-		})
-	case "-grade":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].Grade > filtered[j].Grade
-		})
-	case "nim":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].NIM < filtered[j].NIM
-		})
-	case "-nim":
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].NIM > filtered[j].NIM
-		})
+	offset := (page - 1) * limit
+
+	students, total, err := h.repo.FindAll(
+		c.Context(),
+		search,
+		active,
+		minGrade,
+		maxGrade,
+		sortField,
+		limit,
+		offset,
+	)
+
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal mengambil data mahasiswa: "+err.Error(),
+		)
 	}
 
-	// Pagination
-	total := len(filtered)
-	totalPages := (total + limit - 1) / limit
+	totalPages := 0
 
-	start := (page - 1) * limit
-
-	if start > total {
-		start = total
+	if total > 0 {
+		totalPages = (total + limit - 1) / limit
 	}
 
-	end := start + limit
-	if end > total {
-		end = total
-	}
-
-	data := filtered[start:end]
-
-	return sendSuccess(c, 200, "Data mahasiswa berhasil diambil", fiber.Map{
-		"items": data,
-		"meta": fiber.Map{
-			"page":        page,
-			"limit":       limit,
-			"total":       total,
-			"total_pages": totalPages,
+	return sendSuccess(
+		c,
+		200,
+		"Data mahasiswa berhasil diambil",
+		fiber.Map{
+			"items": students,
+			"meta": fiber.Map{
+				"page":        page,
+				"limit":       limit,
+				"total":       total,
+				"total_pages": totalPages,
+			},
 		},
-	})
+	)
 }
 
 // GET /api/v1/students/:id
-func getStudent(c *fiber.Ctx) error {
-	id := c.Params("id")
+func (h *Handler) GetStudent(c *fiber.Ctx) error {
+	id := strings.Trim(c.Params("id"), "\"'")
 
-	if _, err := parseID(id); err != nil {
-		return sendError(c, 400, "ID harus berupa angka")
+	student, err := h.repo.FindByID(
+		c.Context(),
+		id,
+	)
+
+	if errors.Is(err, repository.ErrNotFound) {
+		return sendError(
+			c,
+			404,
+			"Data mahasiswa tidak ditemukan",
+		)
 	}
 
-	for _, student := range students {
-		if student.ID == id {
-			return sendSuccess(c, 200, "Data mahasiswa ditemukan", student)
-		}
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal mengambil data mahasiswa: "+err.Error(),
+		)
 	}
 
-	return sendError(c, 404, "Data mahasiswa tidak ditemukan")
+	return sendSuccess(
+		c,
+		200,
+		"Data mahasiswa ditemukan",
+		student,
+	)
 }
 
 // POST /api/v1/students
-func createStudent(c *fiber.Ctx) error {
-	if !strings.HasPrefix(c.Get("Content-Type"), "application/json") {
-		return sendError(c, 415, "Content-Type harus application/json")
+func (h *Handler) CreateStudent(c *fiber.Ctx) error {
+	if !strings.HasPrefix(
+		c.Get("Content-Type"),
+		"application/json",
+	) {
+		return sendError(
+			c,
+			415,
+			"Content-Type harus application/json",
+		)
 	}
 
-	var input CreateStudentRequest
+	var input model.CreateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(c, 400, "Body bukan JSON yang valid")
+		return sendError(
+			c,
+			400,
+			"Body bukan JSON yang valid",
+		)
 	}
 
 	if input.NIM == "" {
-		return sendError(c, 422, "Field nim wajib diisi")
+		return sendError(
+			c,
+			422,
+			"Field nim wajib diisi",
+		)
 	}
 
 	if input.Name == "" {
-		return sendError(c, 422, "Field name wajib diisi")
+		return sendError(
+			c,
+			422,
+			"Field name wajib diisi",
+		)
 	}
 
 	if input.Grade < 0 || input.Grade > 100 {
-		return sendError(c, 422, "Grade harus berada di antara 0 sampai 100")
+		return sendError(
+			c,
+			422,
+			"Grade harus berada di antara 0 sampai 100",
+		)
 	}
 
-	// Cek NIM duplikat
-	for _, student := range students {
-		if student.NIM == input.NIM {
-			return sendError(c, 409, "NIM sudah digunakan")
-		}
-	}
-
-	// Membuat ID baru
-	newID := 1
-
-	for _, student := range students {
-		id, err := strconv.Atoi(student.ID)
-		if err == nil && id >= newID {
-			newID = id + 1
-		}
-	}
-
-	// Ubah CreateStudentRequest menjadi Student
-	newStudent := Student{
-		ID:       strconv.Itoa(newID),
+	student := model.Student{
 		NIM:      input.NIM,
 		Name:     input.Name,
 		Grade:    input.Grade,
 		IsActive: input.IsActive,
 	}
 
-	students = append(students, newStudent)
+	result, err := h.repo.Create(
+		c.Context(),
+		student,
+	)
 
-	c.Set("Location", fmt.Sprintf("/api/v1/students/%s", newStudent.ID))
+	if errors.Is(err, repository.ErrDuplicate) {
+		return sendError(
+			c,
+			409,
+			"NIM sudah digunakan",
+		)
+	}
 
-	return sendSuccess(c, 201, "Mahasiswa berhasil ditambahkan", newStudent)
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal menambahkan mahasiswa: "+err.Error(),
+		)
+	}
+
+	c.Set(
+		"Location",
+		"/api/v1/students/"+result.ID,
+	)
+
+	return sendSuccess(
+		c,
+		201,
+		"Mahasiswa berhasil ditambahkan",
+		result,
+	)
 }
 
 // PUT /api/v1/students/:id
-func updateStudent(c *fiber.Ctx) error {
-	id := c.Params("id")
+func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
+	id := strings.Trim(c.Params("id"), "\"'")
 
-	if _, err := parseID(id); err != nil {
-		return sendError(c, 400, "ID harus berupa angka")
+	if !strings.HasPrefix(
+		c.Get("Content-Type"),
+		"application/json",
+	) {
+		return sendError(
+			c,
+			415,
+			"Content-Type harus application/json",
+		)
 	}
 
-	if !strings.HasPrefix(c.Get("Content-Type"), "application/json") {
-		return sendError(c, 415, "Content-Type harus application/json")
-	}
-
-	index := -1
-
-	for i, student := range students {
-		if student.ID == id {
-			index = i
-			break
-		}
-	}
-
-	if index == -1 {
-		return sendError(c, 404, "Data mahasiswa tidak ditemukan")
-	}
-
-	var input UpdateStudentRequest
+	var input model.UpdateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(c, 400, "Body bukan JSON yang valid")
+		return sendError(
+			c,
+			400,
+			"Body bukan JSON yang valid",
+		)
 	}
 
 	if input.NIM == "" || input.Name == "" {
-		return sendError(c, 422, "Field nim dan name wajib diisi untuk PUT")
+		return sendError(
+			c,
+			422,
+			"Field nim dan name wajib diisi untuk PUT",
+		)
 	}
 
 	if input.Grade < 0 || input.Grade > 100 {
-		return sendError(c, 422, "Grade harus berada di antara 0 sampai 100")
+		return sendError(
+			c,
+			422,
+			"Grade harus berada di antara 0 sampai 100",
+		)
 	}
 
-	// Cek NIM duplikat
-	for i, student := range students {
-		if i != index && student.NIM == input.NIM {
-			return sendError(c, 409, "NIM sudah digunakan")
-		}
-	}
-
-	// Update seluruh data mahasiswa
-	updatedStudent := Student{
+	student := model.Student{
 		ID:       id,
 		NIM:      input.NIM,
 		Name:     input.Name,
@@ -268,110 +277,192 @@ func updateStudent(c *fiber.Ctx) error {
 		IsActive: input.IsActive,
 	}
 
-	students[index] = updatedStudent
+	result, err := h.repo.Update(
+		c.Context(),
+		id,
+		student,
+	)
 
-	return sendSuccess(c, 200, "Data mahasiswa berhasil diperbarui", updatedStudent)
+	if errors.Is(err, repository.ErrNotFound) {
+		return sendError(
+			c,
+			404,
+			"Data mahasiswa tidak ditemukan",
+		)
+	}
+
+	if errors.Is(err, repository.ErrDuplicate) {
+		return sendError(
+			c,
+			409,
+			"NIM sudah digunakan",
+		)
+	}
+
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal memperbarui data mahasiswa: "+err.Error(),
+		)
+	}
+
+	return sendSuccess(
+		c,
+		200,
+		"Data mahasiswa berhasil diperbarui",
+		result,
+	)
 }
 
 // PATCH /api/v1/students/:id
-func patchStudent(c *fiber.Ctx) error {
-	id := c.Params("id")
+func (h *Handler) PatchStudent(c *fiber.Ctx) error {
+	id := strings.Trim(c.Params("id"), "\"'")
 
-	if _, err := parseID(id); err != nil {
-		return sendError(c, 400, "ID harus berupa angka")
+	if !strings.HasPrefix(
+		c.Get("Content-Type"),
+		"application/json",
+	) {
+		return sendError(
+			c,
+			415,
+			"Content-Type harus application/json",
+		)
 	}
 
-	if !strings.HasPrefix(c.Get("Content-Type"), "application/json") {
-		return sendError(c, 415, "Content-Type harus application/json")
+	current, err := h.repo.FindByID(
+		c.Context(),
+		id,
+	)
+
+	if errors.Is(err, repository.ErrNotFound) {
+		return sendError(
+			c,
+			404,
+			"Data mahasiswa tidak ditemukan",
+		)
 	}
 
-	index := -1
-
-	for i, student := range students {
-		if student.ID == id {
-			index = i
-			break
-		}
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal mengambil data mahasiswa: "+err.Error(),
+		)
 	}
 
-	if index == -1 {
-		return sendError(c, 404, "Data mahasiswa tidak ditemukan")
-	}
-
-	var input PatchStudentRequest
+	var input model.PatchStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(c, 400, "Body bukan JSON yang valid")
+		return sendError(
+			c,
+			400,
+			"Body bukan JSON yang valid",
+		)
 	}
 
-	student := students[index]
-
-	// Update NIM jika dikirim
 	if input.NIM != nil {
 		if *input.NIM == "" {
-			return sendError(c, 422, "NIM tidak boleh kosong")
+			return sendError(
+				c,
+				422,
+				"NIM tidak boleh kosong",
+			)
 		}
 
-		// Cek NIM duplikat
-		for i, other := range students {
-			if i != index && other.NIM == *input.NIM {
-				return sendError(c, 409, "NIM sudah digunakan")
-			}
-		}
-
-		student.NIM = *input.NIM
+		current.NIM = *input.NIM
 	}
 
-	// Update Name jika dikirim
 	if input.Name != nil {
 		if *input.Name == "" {
-			return sendError(c, 422, "Name tidak boleh kosong")
+			return sendError(
+				c,
+				422,
+				"Name tidak boleh kosong",
+			)
 		}
 
-		student.Name = *input.Name
+		current.Name = *input.Name
 	}
 
-	// Update Grade jika dikirim
 	if input.Grade != nil {
 		if *input.Grade < 0 || *input.Grade > 100 {
-			return sendError(c, 422, "Grade harus berada di antara 0 sampai 100")
+			return sendError(
+				c,
+				422,
+				"Grade harus berada di antara 0 sampai 100",
+			)
 		}
 
-		student.Grade = *input.Grade
+		current.Grade = *input.Grade
 	}
 
-	// Update IsActive jika dikirim
 	if input.IsActive != nil {
-		student.IsActive = *input.IsActive
+		current.IsActive = *input.IsActive
 	}
 
-	students[index] = student
+	result, err := h.repo.Update(
+		c.Context(),
+		id,
+		current,
+	)
 
-	return sendSuccess(c, 200, "Sebagian data mahasiswa berhasil diperbarui", student)
+	if errors.Is(err, repository.ErrNotFound) {
+		return sendError(
+			c,
+			404,
+			"Data mahasiswa tidak ditemukan",
+		)
+	}
+
+	if errors.Is(err, repository.ErrDuplicate) {
+		return sendError(
+			c,
+			409,
+			"NIM sudah digunakan",
+		)
+	}
+
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal memperbarui data mahasiswa: "+err.Error(),
+		)
+	}
+
+	return sendSuccess(
+		c,
+		200,
+		"Sebagian data mahasiswa berhasil diperbarui",
+		result,
+	)
 }
 
 // DELETE /api/v1/students/:id
-func deleteStudent(c *fiber.Ctx) error {
-	id := c.Params("id")
+func (h *Handler) DeleteStudent(c *fiber.Ctx) error {
+	id := strings.Trim(c.Params("id"), "\"'")
 
-	if _, err := parseID(id); err != nil {
-		return sendError(c, 400, "ID harus berupa angka")
+	err := h.repo.Delete(
+		c.Context(),
+		id,
+	)
+
+	if errors.Is(err, repository.ErrNotFound) {
+		return sendError(
+			c,
+			404,
+			"Data mahasiswa tidak ditemukan",
+		)
 	}
 
-	index := -1
-
-	for i, student := range students {
-		if student.ID == id {
-			index = i
-			break
-		}
+	if err != nil {
+		return sendError(
+			c,
+			500,
+			"Gagal menghapus data mahasiswa: "+err.Error(),
+		)
 	}
-
-	if index == -1 {
-		return sendError(c, 404, "Data mahasiswa tidak ditemukan")
-	}
-
-	students = append(students[:index], students[index+1:]...)
 
 	return c.SendStatus(204)
 }
