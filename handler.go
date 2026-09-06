@@ -7,8 +7,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"api-students/model"
-	"api-students/repository"
+	"api-students/app/model"
+	"api-students/app/repository"
 )
 
 type Handler struct {
