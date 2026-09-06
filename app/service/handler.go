@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 
 	"api-students/app/model"
 	"api-students/app/repository"
+	"api-students/helper"
 )
 
 type Handler struct {
@@ -63,7 +64,6 @@ func (h *Handler) GetStudents(c *fiber.Ctx) error {
 	}
 
 	sortField := c.Query("sort")
-
 	offset := (page - 1) * limit
 
 	students, total, err := h.repo.FindAll(
@@ -78,7 +78,7 @@ func (h *Handler) GetStudents(c *fiber.Ctx) error {
 	)
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal mengambil data mahasiswa: "+err.Error(),
@@ -91,7 +91,7 @@ func (h *Handler) GetStudents(c *fiber.Ctx) error {
 		totalPages = (total + limit - 1) / limit
 	}
 
-	return sendSuccess(
+	return helper.SendSuccess(
 		c,
 		200,
 		"Data mahasiswa berhasil diambil",
@@ -117,7 +117,7 @@ func (h *Handler) GetStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return sendError(
+		return helper.SendError(
 			c,
 			404,
 			"Data mahasiswa tidak ditemukan",
@@ -125,14 +125,14 @@ func (h *Handler) GetStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal mengambil data mahasiswa: "+err.Error(),
 		)
 	}
 
-	return sendSuccess(
+	return helper.SendSuccess(
 		c,
 		200,
 		"Data mahasiswa ditemukan",
@@ -146,7 +146,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return sendError(
+		return helper.SendError(
 			c,
 			415,
 			"Content-Type harus application/json",
@@ -156,35 +156,37 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 	var input model.CreateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			400,
 			"Body bukan JSON yang valid",
 		)
 	}
 
-	if input.NIM == "" {
-		return sendError(
-			c,
-			422,
-			"Field nim wajib diisi",
-		)
-	}
+	// Business rule dipindahkan ke student_rules.go
+	if err := ValidateCreateStudent(input); err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidNIM):
+			return helper.SendError(
+				c,
+				422,
+				"Field nim wajib diisi",
+			)
 
-	if input.Name == "" {
-		return sendError(
-			c,
-			422,
-			"Field name wajib diisi",
-		)
-	}
+		case errors.Is(err, ErrInvalidName):
+			return helper.SendError(
+				c,
+				422,
+				"Field name wajib diisi",
+			)
 
-	if input.Grade < 0 || input.Grade > 100 {
-		return sendError(
-			c,
-			422,
-			"Grade harus berada di antara 0 sampai 100",
-		)
+		case errors.Is(err, ErrInvalidGrade):
+			return helper.SendError(
+				c,
+				422,
+				"Grade harus berada di antara 0 sampai 100",
+			)
+		}
 	}
 
 	student := model.Student{
@@ -200,7 +202,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return sendError(
+		return helper.SendError(
 			c,
 			409,
 			"NIM sudah digunakan",
@@ -208,7 +210,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal menambahkan mahasiswa: "+err.Error(),
@@ -220,7 +222,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 		"/api/v1/students/"+result.ID,
 	)
 
-	return sendSuccess(
+	return helper.SendSuccess(
 		c,
 		201,
 		"Mahasiswa berhasil ditambahkan",
@@ -236,7 +238,7 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return sendError(
+		return helper.SendError(
 			c,
 			415,
 			"Content-Type harus application/json",
@@ -246,27 +248,31 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	var input model.UpdateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			400,
 			"Body bukan JSON yang valid",
 		)
 	}
 
-	if input.NIM == "" || input.Name == "" {
-		return sendError(
-			c,
-			422,
-			"Field nim dan name wajib diisi untuk PUT",
-		)
-	}
+	// Business rule dipindahkan ke student_rules.go
+	if err := ValidateUpdateStudent(input); err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidNIM),
+			errors.Is(err, ErrInvalidName):
+			return helper.SendError(
+				c,
+				422,
+				"Field nim dan name wajib diisi untuk PUT",
+			)
 
-	if input.Grade < 0 || input.Grade > 100 {
-		return sendError(
-			c,
-			422,
-			"Grade harus berada di antara 0 sampai 100",
-		)
+		case errors.Is(err, ErrInvalidGrade):
+			return helper.SendError(
+				c,
+				422,
+				"Grade harus berada di antara 0 sampai 100",
+			)
+		}
 	}
 
 	student := model.Student{
@@ -284,7 +290,7 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return sendError(
+		return helper.SendError(
 			c,
 			404,
 			"Data mahasiswa tidak ditemukan",
@@ -292,7 +298,7 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	}
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return sendError(
+		return helper.SendError(
 			c,
 			409,
 			"NIM sudah digunakan",
@@ -300,14 +306,14 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal memperbarui data mahasiswa: "+err.Error(),
 		)
 	}
 
-	return sendSuccess(
+	return helper.SendSuccess(
 		c,
 		200,
 		"Data mahasiswa berhasil diperbarui",
@@ -323,7 +329,7 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return sendError(
+		return helper.SendError(
 			c,
 			415,
 			"Content-Type harus application/json",
@@ -336,7 +342,7 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return sendError(
+		return helper.SendError(
 			c,
 			404,
 			"Data mahasiswa tidak ditemukan",
@@ -344,7 +350,7 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal mengambil data mahasiswa: "+err.Error(),
@@ -354,51 +360,37 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	var input model.PatchStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			400,
 			"Body bukan JSON yang valid",
 		)
 	}
 
-	if input.NIM != nil {
-		if *input.NIM == "" {
-			return sendError(
+	// Business rule dan penerapan perubahan dipindahkan ke student_rules.go
+	if err := ApplyPatchStudent(&current, input); err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidNIM):
+			return helper.SendError(
 				c,
 				422,
 				"NIM tidak boleh kosong",
 			)
-		}
 
-		current.NIM = *input.NIM
-	}
-
-	if input.Name != nil {
-		if *input.Name == "" {
-			return sendError(
+		case errors.Is(err, ErrInvalidName):
+			return helper.SendError(
 				c,
 				422,
 				"Name tidak boleh kosong",
 			)
-		}
 
-		current.Name = *input.Name
-	}
-
-	if input.Grade != nil {
-		if *input.Grade < 0 || *input.Grade > 100 {
-			return sendError(
+		case errors.Is(err, ErrInvalidGrade):
+			return helper.SendError(
 				c,
 				422,
 				"Grade harus berada di antara 0 sampai 100",
 			)
 		}
-
-		current.Grade = *input.Grade
-	}
-
-	if input.IsActive != nil {
-		current.IsActive = *input.IsActive
 	}
 
 	result, err := h.repo.Update(
@@ -408,7 +400,7 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return sendError(
+		return helper.SendError(
 			c,
 			404,
 			"Data mahasiswa tidak ditemukan",
@@ -416,7 +408,7 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	}
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return sendError(
+		return helper.SendError(
 			c,
 			409,
 			"NIM sudah digunakan",
@@ -424,14 +416,14 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal memperbarui data mahasiswa: "+err.Error(),
 		)
 	}
 
-	return sendSuccess(
+	return helper.SendSuccess(
 		c,
 		200,
 		"Sebagian data mahasiswa berhasil diperbarui",
@@ -449,7 +441,7 @@ func (h *Handler) DeleteStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return sendError(
+		return helper.SendError(
 			c,
 			404,
 			"Data mahasiswa tidak ditemukan",
@@ -457,7 +449,7 @@ func (h *Handler) DeleteStudent(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return sendError(
+		return helper.SendError(
 			c,
 			500,
 			"Gagal menghapus data mahasiswa: "+err.Error(),

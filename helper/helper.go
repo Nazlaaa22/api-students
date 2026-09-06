@@ -1,8 +1,8 @@
-package main
+package helper
 
 import "github.com/gofiber/fiber/v2"
 
-func sendSuccess(
+func SendSuccess(
 	c *fiber.Ctx,
 	status int,
 	message string,
@@ -15,7 +15,7 @@ func sendSuccess(
 	})
 }
 
-func sendError(
+func SendError(
 	c *fiber.Ctx,
 	status int,
 	message string,
