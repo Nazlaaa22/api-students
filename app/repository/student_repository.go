@@ -53,10 +53,8 @@ func NewStudentRepository(db *pgxpool.Pool) StudentRepository {
 	}
 }
 
-// ======================================================
-// NORMALIZE UUID
-// ======================================================
 
+// NORMALIZE UUID
 func normalizeID(id string) string {
 	// Menghapus spasi dan tanda kutip jika ID
 	// masuk dalam bentuk:
@@ -68,10 +66,8 @@ func normalizeID(id string) string {
 	)
 }
 
-// ======================================================
-// FIND ALL
-// ======================================================
 
+// FIND ALL
 func (r *studentRepository) FindAll(
 	ctx context.Context,
 	search string,

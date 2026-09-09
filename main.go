@@ -61,12 +61,16 @@ func main() {
 
 	// Membuat repository
 	studentRepo := repository.NewStudentRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	tokenRepo := repository.NewTokenRepository(db)
 
 	// Membuat handler/service
 	handler := service.NewHandler(studentRepo)
+	authService := service.NewAuthService(userRepo, tokenRepo)
 
-	// Mendaftarkan seluruh route mahasiswa
+	// Mendaftarkan route
 	route.SetupStudentRoutes(app, handler)
+	route.SetupAuthRoutes(app, authService)
 
 	log.Println("Server berjalan di http://127.0.0.1:3000")
 
