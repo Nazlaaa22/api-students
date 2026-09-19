@@ -12,10 +12,28 @@ func SetupStudentRoutes(app *fiber.App, handler *service.Handler) {
 
 	students := api.Group("/students", middleware.RequireAuth())
 
-	students.Get("/", handler.GetStudents)
+	// Permission dapat ditentukan tanpa membaca data student.
+	students.Get(
+		"/",
+		middleware.RequirePermission("student:list"),
+		handler.GetStudents,
+	)
+
+	students.Post(
+		"/",
+		middleware.RequirePermission("student:create"),
+		handler.CreateStudent,
+	)
+
+	students.Delete(
+		"/:id",
+		middleware.RequirePermission("student:delete"),
+		handler.DeleteStudent,
+	)
+
+	// Endpoint berikut membutuhkan pemeriksaan ownership
+	// sehingga pengecekannya dilakukan di service.
 	students.Get("/:id", handler.GetStudent)
-	students.Post("/", handler.CreateStudent)
 	students.Put("/:id", handler.UpdateStudent)
 	students.Patch("/:id", handler.PatchStudent)
-	students.Delete("/:id", handler.DeleteStudent)
 }

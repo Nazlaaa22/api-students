@@ -19,11 +19,16 @@ func RequestLogger() fiber.Handler {
 		err := c.Next()
 
 		duration := time.Since(start)
-
 		status := c.Response().StatusCode()
+
+		// Ambil user_id dan role dari JWT middleware.
+		userID := c.Locals("user_id")
+		role := c.Locals("role")
 
 		logData := map[string]interface{}{
 			"request_id": requestID,
+			"user_id":    userID,
+			"role":       role,
 			"method":     c.Method(),
 			"path":       c.OriginalURL(),
 			"status":     status,
@@ -31,6 +36,7 @@ func RequestLogger() fiber.Handler {
 		}
 
 		data, marshalErr := json.Marshal(logData)
+
 		if marshalErr == nil {
 			log.Println(string(data))
 		}

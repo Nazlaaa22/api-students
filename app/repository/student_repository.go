@@ -53,21 +53,18 @@ func NewStudentRepository(db *pgxpool.Pool) StudentRepository {
 	}
 }
 
-
 // NORMALIZE UUID
 func normalizeID(id string) string {
-	// Menghapus spasi dan tanda kutip jika ID
-	// masuk dalam bentuk:
-	// "6c357605-4d6e-4504-a291-44b8f7faaf1"
-
 	return strings.Trim(
 		strings.TrimSpace(id),
 		"\"'",
 	)
 }
 
-
+// ======================================================
 // FIND ALL
+// ======================================================
+
 func (r *studentRepository) FindAll(
 	ctx context.Context,
 	search string,
@@ -177,7 +174,13 @@ func (r *studentRepository) FindAll(
 	queryArgs := append([]any{}, args...)
 
 	query := `
-		SELECT id, nim, name, grade, is_active
+		SELECT
+			id,
+			nim,
+			name,
+			grade,
+			is_active,
+			owner_id
 		FROM students
 		` + whereClause + `
 		` + orderClause + `
@@ -214,6 +217,7 @@ func (r *studentRepository) FindAll(
 			&student.Name,
 			&student.Grade,
 			&student.IsActive,
+			&student.OwnerID,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -240,13 +244,18 @@ func (r *studentRepository) FindByID(
 	id string,
 ) (model.Student, error) {
 
-	// Bersihkan ID terlebih dahulu
 	id = normalizeID(id)
 
 	var student model.Student
 
 	query := `
-		SELECT id, nim, name, grade, is_active
+		SELECT
+			id,
+			nim,
+			name,
+			grade,
+			is_active,
+			owner_id
 		FROM students
 		WHERE id = $1
 	`
@@ -261,6 +270,7 @@ func (r *studentRepository) FindByID(
 		&student.Name,
 		&student.Grade,
 		&student.IsActive,
+		&student.OwnerID,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -288,10 +298,17 @@ func (r *studentRepository) Create(
 			nim,
 			name,
 			grade,
-			is_active
+			is_active,
+			owner_id
 		)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, nim, name, grade, is_active
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING
+			id,
+			nim,
+			name,
+			grade,
+			is_active,
+			owner_id
 	`
 
 	var result model.Student
@@ -303,12 +320,14 @@ func (r *studentRepository) Create(
 		student.Name,
 		student.Grade,
 		student.IsActive,
+		student.OwnerID,
 	).Scan(
 		&result.ID,
 		&result.NIM,
 		&result.Name,
 		&result.Grade,
 		&result.IsActive,
+		&result.OwnerID,
 	)
 
 	if err != nil {
@@ -337,7 +356,6 @@ func (r *studentRepository) Update(
 	student model.Student,
 ) (model.Student, error) {
 
-	// Bersihkan ID terlebih dahulu
 	id = normalizeID(id)
 
 	query := `
@@ -348,7 +366,13 @@ func (r *studentRepository) Update(
 			grade = $3,
 			is_active = $4
 		WHERE id = $5
-		RETURNING id, nim, name, grade, is_active
+		RETURNING
+			id,
+			nim,
+			name,
+			grade,
+			is_active,
+			owner_id
 	`
 
 	var result model.Student
@@ -367,14 +391,13 @@ func (r *studentRepository) Update(
 		&result.Name,
 		&result.Grade,
 		&result.IsActive,
+		&result.OwnerID,
 	)
 
-	// Data tidak ditemukan
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Student{}, ErrNotFound
 	}
 
-	// Error lainnya
 	if err != nil {
 
 		var pgErr *pgconn.PgError
@@ -400,7 +423,6 @@ func (r *studentRepository) Delete(
 	id string,
 ) error {
 
-	// Bersihkan ID terlebih dahulu
 	id = normalizeID(id)
 
 	query := `
@@ -418,7 +440,6 @@ func (r *studentRepository) Delete(
 		return err
 	}
 
-	// Tidak ada data yang dihapus
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
 	}
