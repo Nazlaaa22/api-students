@@ -72,6 +72,10 @@ func main() {
 	route.SetupStudentRoutes(app, handler)
 	route.SetupAuthRoutes(app, authService)
 
+	app.Use(func(c *fiber.Ctx) error {
+		return helper.NotFound("endpoint tidak ditemukan")
+	})
+
 	log.Println("Server berjalan di http://127.0.0.1:3000")
 
 	// Menjalankan server

@@ -1,7 +1,13 @@
 package config
 
-import "github.com/gofiber/fiber/v2"
+import (
+	"api-students/middleware"
+
+	"github.com/gofiber/fiber/v2"
+)
 
 func NewApp() *fiber.App {
-	return fiber.New()
+	return fiber.New(fiber.Config{
+		ErrorHandler: middleware.ErrorHandler,
+	})
 }

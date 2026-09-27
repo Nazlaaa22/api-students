@@ -1,71 +1,10 @@
 package service
 
 import (
-	"errors"
 	"testing"
 
 	"api-students/app/model"
 )
-
-func TestValidateCreateStudentValid(t *testing.T) {
-	input := model.CreateStudentRequest{
-		NIM:      "001",
-		Name:     "Nazla",
-		Grade:    90,
-		IsActive: true,
-	}
-
-	err := ValidateCreateStudent(input)
-
-	if err != nil {
-		t.Fatalf("data valid seharusnya tidak menghasilkan error, tetapi mendapat: %v", err)
-	}
-}
-
-func TestValidateCreateStudentInvalidNIM(t *testing.T) {
-	input := model.CreateStudentRequest{
-		NIM:      "",
-		Name:     "Nazla",
-		Grade:    90,
-		IsActive: true,
-	}
-
-	err := ValidateCreateStudent(input)
-
-	if !errors.Is(err, ErrInvalidNIM) {
-		t.Fatalf("seharusnya ErrInvalidNIM, tetapi mendapat: %v", err)
-	}
-}
-
-func TestValidateCreateStudentInvalidGrade(t *testing.T) {
-	input := model.CreateStudentRequest{
-		NIM:      "001",
-		Name:     "Nazla",
-		Grade:    101,
-		IsActive: true,
-	}
-
-	err := ValidateCreateStudent(input)
-
-	if !errors.Is(err, ErrInvalidGrade) {
-		t.Fatalf("seharusnya ErrInvalidGrade, tetapi mendapat: %v", err)
-	}
-}
-
-func TestValidateUpdateStudentValid(t *testing.T) {
-	input := model.UpdateStudentRequest{
-		NIM:      "002",
-		Name:     "Nisa",
-		Grade:    85,
-		IsActive: true,
-	}
-
-	err := ValidateUpdateStudent(input)
-
-	if err != nil {
-		t.Fatalf("data valid seharusnya tidak menghasilkan error, tetapi mendapat: %v", err)
-	}
-}
 
 func TestApplyPatchStudent(t *testing.T) {
 	current := model.Student{
@@ -74,49 +13,58 @@ func TestApplyPatchStudent(t *testing.T) {
 		Name:     "Nazla",
 		Grade:    80,
 		IsActive: true,
+		OwnerID:  1,
 	}
 
 	newName := "Nazla Updated"
 	newGrade := 95.0
+	newIsActive := false
 
 	input := model.PatchStudentRequest{
-		Name:  &newName,
-		Grade: &newGrade,
+		Name:     &newName,
+		Grade:    &newGrade,
+		IsActive: &newIsActive,
 	}
 
-	err := ApplyPatchStudent(&current, input)
-
-	if err != nil {
-		t.Fatalf("PATCH valid seharusnya tidak menghasilkan error: %v", err)
-	}
+	ApplyPatchStudent(&current, input)
 
 	if current.Name != "Nazla Updated" {
-		t.Fatalf("Name tidak berubah dengan benar")
+		t.Errorf("Name tidak berubah: got %s", current.Name)
 	}
 
 	if current.Grade != 95 {
-		t.Fatalf("Grade tidak berubah dengan benar")
+		t.Errorf("Grade tidak berubah: got %v", current.Grade)
+	}
+
+	if current.IsActive {
+		t.Error("IsActive seharusnya berubah menjadi false")
+	}
+
+	if current.NIM != "001" {
+		t.Errorf("NIM seharusnya tetap 001, got %s", current.NIM)
+	}
+
+	if current.OwnerID != 1 {
+		t.Errorf("OwnerID seharusnya tetap 1, got %d", current.OwnerID)
 	}
 }
 
-func TestApplyPatchStudentInvalidGrade(t *testing.T) {
+func TestApplyPatchStudentEmpty(t *testing.T) {
 	current := model.Student{
 		ID:       "test-id",
 		NIM:      "001",
 		Name:     "Nazla",
 		Grade:    80,
 		IsActive: true,
+		OwnerID:  1,
 	}
 
-	invalidGrade := 101.0
+	input := model.PatchStudentRequest{}
 
-	input := model.PatchStudentRequest{
-		Grade: &invalidGrade,
-	}
+	ApplyPatchStudent(&current, input)
 
-	err := ApplyPatchStudent(&current, input)
-
-	if !errors.Is(err, ErrInvalidGrade) {
-		t.Fatalf("seharusnya ErrInvalidGrade, tetapi mendapat: %v", err)
+	if current.Name != "Nazla" || current.Grade != 80 ||
+		current.IsActive != true || current.NIM != "001" {
+		t.Error("Field seharusnya tidak berubah ketika PATCH kosong")
 	}
 }

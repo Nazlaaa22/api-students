@@ -1,7 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"encoding/csv"
 	"errors"
+	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -26,8 +30,6 @@ func NewHandler(repo repository.StudentRepository) *Handler {
 // HELPER AUTHORIZATION
 // ======================================================
 
-// getCurrentUser mengambil informasi user dari JWT
-// yang sebelumnya sudah disimpan oleh middleware RequireAuth.
 func getCurrentUser(c *fiber.Ctx) (model.AuthUser, error) {
 	userID, ok := c.Locals("user_id").(int)
 	if !ok {
@@ -51,7 +53,6 @@ func getCurrentUser(c *fiber.Ctx) (model.AuthUser, error) {
 	}, nil
 }
 
-// getPermissionSet mengambil permission berdasarkan role user.
 func getPermissionSet(c *fiber.Ctx) helper.PermissionSet {
 	role, ok := c.Locals("role").(string)
 
@@ -59,98 +60,191 @@ func getPermissionSet(c *fiber.Ctx) helper.PermissionSet {
 		return helper.PermissionSet{}
 	}
 
-	permissions := helper.PermissionsForRole(role)
+	return helper.PermissionsForRole(role)
+}
 
-	return permissions
+// ======================================================
+// CONTENT NEGOTIATION
+// ======================================================
+
+// negotiateStudentsFormat menentukan format response berdasarkan
+// header Accept. Jika Accept kosong atau */*, format default JSON.
+func negotiateStudentsFormat(accept string) string {
+	accept = strings.TrimSpace(strings.ToLower(accept))
+
+	if accept == "" || accept == "*/*" {
+		return "json"
+	}
+
+	for _, item := range strings.Split(accept, ",") {
+		parts := strings.Split(item, ";")
+		mediaType := strings.TrimSpace(parts[0])
+
+		// Abaikan media type yang memiliki q=0.
+		q := 1.0
+		for _, param := range parts[1:] {
+			param = strings.TrimSpace(param)
+
+			if strings.HasPrefix(param, "q=") {
+				value, err := strconv.ParseFloat(
+					strings.TrimSpace(strings.TrimPrefix(param, "q=")),
+					64,
+				)
+				if err != nil {
+					q = 0
+				} else {
+					q = value
+				}
+			}
+		}
+
+		if q <= 0 {
+			continue
+		}
+
+		switch mediaType {
+		case "application/json", "application/*":
+			return "json"
+		case "text/csv", "text/*":
+			return "csv"
+		case "*/*":
+			return "json"
+		}
+	}
+
+	return ""
 }
 
 // ======================================================
 // GET /api/v1/students
+// JSON & CSV CONTENT NEGOTIATION
 // ======================================================
 
 func (h *Handler) GetStudents(c *fiber.Ctx) error {
-	page, err := strconv.Atoi(c.Query("page", "1"))
-	if err != nil || page < 1 {
-		page = 1
+	// --------------------------------------------------
+	// NEGOSIASI FORMAT RESPONSE
+	// --------------------------------------------------
+
+	format := negotiateStudentsFormat(c.Get("Accept"))
+
+	if format == "" {
+		return helper.SendError(
+			c,
+			fiber.StatusNotAcceptable,
+			"Format response tidak didukung. Gunakan Accept: application/json atau text/csv",
+		)
 	}
+
+	// --------------------------------------------------
+	// PAGINATION
+	// --------------------------------------------------
 
 	limit, err := strconv.Atoi(c.Query("limit", "10"))
 	if err != nil || limit < 1 {
 		limit = 10
 	}
 
-	search := c.Query("search")
-
-	var active *bool
-
-	if value := c.Query("active"); value != "" {
-		parsed, err := strconv.ParseBool(value)
-
-		if err == nil {
-			active = &parsed
-		}
+	if limit > 100 {
+		limit = 100
 	}
 
-	var minGrade *float64
+	var cursor *model.Cursor
 
-	if value := c.Query("min_grade"); value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
-
-		if err == nil {
-			minGrade = &parsed
+	if encoded := c.Query("cursor"); encoded != "" {
+		decoded, err := helper.DecodeCursor(encoded)
+		if err != nil {
+			return helper.BadRequest("Cursor tidak valid")
 		}
+
+		cursor = &decoded
 	}
 
-	var maxGrade *float64
+	// --------------------------------------------------
+	// AMBIL DATA
+	// --------------------------------------------------
 
-	if value := c.Query("max_grade"); value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
-
-		if err == nil {
-			maxGrade = &parsed
-		}
-	}
-
-	sortField := c.Query("sort")
-	offset := (page - 1) * limit
-
-	students, total, err := h.repo.FindAll(
+	students, nextCursor, hasMore, err := h.repo.FindAfterCursor(
 		c.Context(),
-		search,
-		active,
-		minGrade,
-		maxGrade,
-		sortField,
+		cursor,
 		limit,
-		offset,
 	)
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal mengambil data mahasiswa: "+err.Error(),
-		)
+		return helper.Internal(err)
 	}
 
-	totalPages := 0
+	// --------------------------------------------------
+	// RESPONSE CSV
+	// --------------------------------------------------
 
-	if total > 0 {
-		totalPages = (total + limit - 1) / limit
+	if format == "csv" {
+		var buffer bytes.Buffer
+		writer := csv.NewWriter(&buffer)
+
+		// Header CSV
+		if err := writer.Write([]string{
+			"id",
+			"nim",
+			"name",
+			"grade",
+			"is_active",
+			"owner_id",
+		}); err != nil {
+			return helper.Internal(err)
+		}
+
+		// Data mahasiswa
+		for _, student := range students {
+			if err := writer.Write([]string{
+				student.ID,
+				student.NIM,
+				student.Name,
+				fmt.Sprint(student.Grade),
+				strconv.FormatBool(student.IsActive),
+				strconv.Itoa(student.OwnerID),
+			}); err != nil {
+				return helper.Internal(err)
+			}
+		}
+
+		writer.Flush()
+
+		if err := writer.Error(); err != nil {
+			return helper.Internal(err)
+		}
+
+		c.Set("Content-Type", "text/csv; charset=utf-8")
+		c.Set(
+			"Content-Disposition",
+			"attachment; filename=students.csv",
+		)
+
+		return c.Send(buffer.Bytes())
+	}
+
+	// --------------------------------------------------
+	// RESPONSE JSON
+	// --------------------------------------------------
+
+	meta := fiber.Map{
+		"limit":    limit,
+		"has_more": hasMore,
+	}
+
+	if nextCursor != nil {
+		meta["next_cursor"] = helper.EncodeCursor(
+			nextCursor.CreatedAt,
+			nextCursor.ID,
+		)
 	}
 
 	return helper.SendSuccess(
 		c,
-		200,
+		fiber.StatusOK,
 		"Data mahasiswa berhasil diambil",
 		fiber.Map{
 			"items": students,
-			"meta": fiber.Map{
-				"page":        page,
-				"limit":       limit,
-				"total":       total,
-				"total_pages": totalPages,
-			},
+			"meta":  meta,
 		},
 	)
 }
@@ -168,54 +262,34 @@ func (h *Handler) GetStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal mengambil data mahasiswa: "+err.Error(),
-		)
+		return helper.Internal(err)
 	}
 
-	// Ambil user yang sedang login.
 	currentUser, err := getCurrentUser(c)
-
 	if err != nil {
-		return helper.SendError(
-			c,
-			401,
-			"User belum terautentikasi",
-		)
+		return helper.Unauthorized("User belum terautentikasi")
 	}
 
-	// Ambil permission berdasarkan role.
 	permissions := getPermissionSet(c)
 
-	// User boleh melihat:
-	// 1. Student miliknya sendiri
-	// 2. Student orang lain jika punya student:read:any
 	if !CanAccessStudent(
 		currentUser,
 		student.OwnerID,
 		&permissions,
 		"student:read:any",
 	) {
-		return helper.SendError(
-			c,
-			403,
+		return helper.Forbidden(
 			"Tidak memiliki akses ke data mahasiswa ini",
 		)
 	}
 
 	return helper.SendSuccess(
 		c,
-		200,
+		fiber.StatusOK,
 		"Data mahasiswa ditemukan",
 		student,
 	)
@@ -230,9 +304,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return helper.SendError(
-			c,
-			415,
+		return helper.UnsupportedMediaType(
 			"Content-Type harus application/json",
 		)
 	}
@@ -240,52 +312,18 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 	var input model.CreateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return helper.SendError(
-			c,
-			400,
-			"Body bukan JSON yang valid",
-		)
+		return helper.BadRequest("Body bukan JSON yang valid")
 	}
 
-	// Business rule dipindahkan ke student_rules.go
-	if err := ValidateCreateStudent(input); err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidNIM):
-			return helper.SendError(
-				c,
-				422,
-				"Field nim wajib diisi",
-			)
-
-		case errors.Is(err, ErrInvalidName):
-			return helper.SendError(
-				c,
-				422,
-				"Field name wajib diisi",
-			)
-
-		case errors.Is(err, ErrInvalidGrade):
-			return helper.SendError(
-				c,
-				422,
-				"Grade harus berada di antara 0 sampai 100",
-			)
-		}
+	if validationErrors := helper.ValidateStruct(input); validationErrors != nil {
+		return helper.Validation(validationErrors)
 	}
 
-	// Ambil user_id dari JWT.
 	currentUser, err := getCurrentUser(c)
-
 	if err != nil {
-		return helper.SendError(
-			c,
-			401,
-			"User belum terautentikasi",
-		)
+		return helper.Unauthorized("User belum terautentikasi")
 	}
 
-	// owner_id SELALU berasal dari user_id JWT.
-	// Bukan dari request body.
 	student := model.Student{
 		NIM:      input.NIM,
 		Name:     input.Name,
@@ -300,19 +338,11 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return helper.SendError(
-			c,
-			409,
-			"NIM sudah digunakan",
-		)
+		return helper.Conflict("NIM sudah digunakan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal menambahkan mahasiswa: "+err.Error(),
-		)
+		return helper.Internal(err)
 	}
 
 	c.Set(
@@ -322,7 +352,7 @@ func (h *Handler) CreateStudent(c *fiber.Ctx) error {
 
 	return helper.SendSuccess(
 		c,
-		201,
+		fiber.StatusCreated,
 		"Mahasiswa berhasil ditambahkan",
 		result,
 	)
@@ -339,59 +369,38 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return helper.SendError(
-			c,
-			415,
+		return helper.UnsupportedMediaType(
 			"Content-Type harus application/json",
 		)
 	}
 
-	// Cari data existing terlebih dahulu untuk mengetahui owner_id.
 	existing, err := h.repo.FindByID(
 		c.Context(),
 		id,
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal mengambil data mahasiswa: "+err.Error(),
-		)
+		return helper.Internal(err)
 	}
 
-	// Ambil user yang sedang login.
 	currentUser, err := getCurrentUser(c)
-
 	if err != nil {
-		return helper.SendError(
-			c,
-			401,
-			"User belum terautentikasi",
-		)
+		return helper.Unauthorized("User belum terautentikasi")
 	}
 
 	permissions := getPermissionSet(c)
 
-	// Owner boleh update student miliknya sendiri.
-	// User lain harus memiliki student:update:any.
 	if !CanAccessStudent(
 		currentUser,
 		existing.OwnerID,
 		&permissions,
 		"student:update:any",
 	) {
-		return helper.SendError(
-			c,
-			403,
+		return helper.Forbidden(
 			"Tidak memiliki akses untuk memperbarui data mahasiswa ini",
 		)
 	}
@@ -399,35 +408,13 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	var input model.UpdateStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return helper.SendError(
-			c,
-			400,
-			"Body bukan JSON yang valid",
-		)
+		return helper.BadRequest("Body bukan JSON yang valid")
 	}
 
-	// Business rule dipindahkan ke student_rules.go
-	if err := ValidateUpdateStudent(input); err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidNIM),
-			errors.Is(err, ErrInvalidName):
-			return helper.SendError(
-				c,
-				422,
-				"Field nim dan name wajib diisi untuk PUT",
-			)
-
-		case errors.Is(err, ErrInvalidGrade):
-			return helper.SendError(
-				c,
-				422,
-				"Grade harus berada di antara 0 sampai 100",
-			)
-		}
+	if validationErrors := helper.ValidateStruct(input); validationErrors != nil {
+		return helper.Validation(validationErrors)
 	}
 
-	// OwnerID sengaja menggunakan owner_id existing.
-	// Tidak mengambil owner_id dari request body.
 	student := model.Student{
 		ID:       id,
 		NIM:      input.NIM,
@@ -444,32 +431,20 @@ func (h *Handler) UpdateStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return helper.SendError(
-			c,
-			409,
-			"NIM sudah digunakan",
-		)
+		return helper.Conflict("NIM sudah digunakan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal memperbarui data mahasiswa: "+err.Error(),
-		)
+		return helper.Internal(err)
 	}
 
 	return helper.SendSuccess(
 		c,
-		200,
+		fiber.StatusOK,
 		"Data mahasiswa berhasil diperbarui",
 		result,
 	)
@@ -486,59 +461,39 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 		c.Get("Content-Type"),
 		"application/json",
 	) {
-		return helper.SendError(
-			c,
-			415,
+		return helper.UnsupportedMediaType(
 			"Content-Type harus application/json",
 		)
 	}
 
-	// Cari student terlebih dahulu.
 	current, err := h.repo.FindByID(
 		c.Context(),
 		id,
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal mengambil data mahasiswa: "+err.Error(),
-		)
+		log.Printf("PATCH student FindByID (id=%q): %v", id, err)
+		return helper.Internal(err)
 	}
 
-	// Ambil user yang sedang login.
 	currentUser, err := getCurrentUser(c)
-
 	if err != nil {
-		return helper.SendError(
-			c,
-			401,
-			"User belum terautentikasi",
-		)
+		return helper.Unauthorized("User belum terautentikasi")
 	}
 
 	permissions := getPermissionSet(c)
 
-	// Owner boleh PATCH data miliknya sendiri.
-	// User lain membutuhkan student:update:any.
 	if !CanAccessStudent(
 		currentUser,
 		current.OwnerID,
 		&permissions,
 		"student:update:any",
 	) {
-		return helper.SendError(
-			c,
-			403,
+		return helper.Forbidden(
 			"Tidak memiliki akses untuk memperbarui data mahasiswa ini",
 		)
 	}
@@ -546,41 +501,15 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	var input model.PatchStudentRequest
 
 	if err := c.BodyParser(&input); err != nil {
-		return helper.SendError(
-			c,
-			400,
-			"Body bukan JSON yang valid",
-		)
+		return helper.BadRequest("Body bukan JSON yang valid")
 	}
 
-	// Business rule dan penerapan perubahan dipindahkan ke student_rules.go
-	if err := ApplyPatchStudent(&current, input); err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidNIM):
-			return helper.SendError(
-				c,
-				422,
-				"NIM tidak boleh kosong",
-			)
-
-		case errors.Is(err, ErrInvalidName):
-			return helper.SendError(
-				c,
-				422,
-				"Name tidak boleh kosong",
-			)
-
-		case errors.Is(err, ErrInvalidGrade):
-			return helper.SendError(
-				c,
-				422,
-				"Grade harus berada di antara 0 sampai 100",
-			)
-		}
+	if validationErrors := helper.ValidateStruct(input); validationErrors != nil {
+		return helper.Validation(validationErrors)
 	}
 
-	// ApplyPatchStudent hanya mengubah field mahasiswa,
-	// bukan OwnerID.
+	ApplyPatchStudent(&current, input)
+
 	result, err := h.repo.Update(
 		c.Context(),
 		id,
@@ -588,32 +517,21 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if errors.Is(err, repository.ErrDuplicate) {
-		return helper.SendError(
-			c,
-			409,
-			"NIM sudah digunakan",
-		)
+		return helper.Conflict("NIM sudah digunakan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal memperbarui data mahasiswa: "+err.Error(),
-		)
+		log.Printf("PATCH student Update (id=%q): %v", id, err)
+		return helper.Internal(err)
 	}
 
 	return helper.SendSuccess(
 		c,
-		200,
+		fiber.StatusOK,
 		"Sebagian data mahasiswa berhasil diperbarui",
 		result,
 	)
@@ -626,26 +544,49 @@ func (h *Handler) PatchStudent(c *fiber.Ctx) error {
 func (h *Handler) DeleteStudent(c *fiber.Ctx) error {
 	id := strings.Trim(c.Params("id"), "\"'")
 
-	err := h.repo.Delete(
+	existing, err := h.repo.FindByID(
 		c.Context(),
 		id,
 	)
 
 	if errors.Is(err, repository.ErrNotFound) {
-		return helper.SendError(
-			c,
-			404,
-			"Data mahasiswa tidak ditemukan",
-		)
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
 	}
 
 	if err != nil {
-		return helper.SendError(
-			c,
-			500,
-			"Gagal menghapus data mahasiswa: "+err.Error(),
+		return helper.Internal(err)
+	}
+
+	currentUser, err := getCurrentUser(c)
+	if err != nil {
+		return helper.Unauthorized("User belum terautentikasi")
+	}
+
+	permissions := getPermissionSet(c)
+
+	if !CanAccessStudent(
+		currentUser,
+		existing.OwnerID,
+		&permissions,
+		"student:delete:any",
+	) {
+		return helper.Forbidden(
+			"Tidak memiliki akses untuk menghapus data mahasiswa ini",
 		)
 	}
 
-	return c.SendStatus(204)
+	err = h.repo.Delete(
+		c.Context(),
+		id,
+	)
+
+	if errors.Is(err, repository.ErrNotFound) {
+		return helper.NotFound("Data mahasiswa tidak ditemukan")
+	}
+
+	if err != nil {
+		return helper.Internal(err)
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
 }

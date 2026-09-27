@@ -16,13 +16,36 @@ func SendSuccess(
 }
 
 func SendError(
-	c *fiber.Ctx,
+	_ *fiber.Ctx,
 	status int,
 	message string,
 ) error {
-	return c.Status(status).JSON(fiber.Map{
-		"data":    nil,
-		"message": message,
-		"success": false,
-	})
+	code := CodeInternal
+
+	switch status {
+	case fiber.StatusBadRequest:
+		code = CodeBadRequest
+	case fiber.StatusUnauthorized:
+		code = CodeUnauthorized
+	case fiber.StatusForbidden:
+		code = CodeForbidden
+	case fiber.StatusNotFound:
+		code = CodeNotFound
+	case fiber.StatusConflict:
+		code = CodeConflict
+	case fiber.StatusUnprocessableEntity:
+		code = CodeValidation
+	case fiber.StatusUnsupportedMediaType:
+		code = CodeUnsupportedMedia
+	case fiber.StatusNotAcceptable:
+		code = CodeNotAcceptable
+	case fiber.StatusTooManyRequests:
+		code = CodeTooManyRequests
+	}
+
+	return &AppError{
+		Status:  status,
+		Code:    code,
+		Message: message,
+	}
 }
